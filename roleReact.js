@@ -3,10 +3,56 @@ const client = new Client();
 const scraper = require('./courseScraper');
 const schedule = require('node-schedule');
 const moment = require('moment');
-const jobs = new Map();
+const mongoose = require('mongoose');
 require('dotenv-flow').config();
 
 var messageID = '668623232861208596';
+
+// Database connection
+const connectionURL = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_USER}@phibot-database-3drx9.mongodb.net/<dbname>?retryWrites=true&w=majority`
+mongoose.connect(connectionURL, { useNewUrlParser: true, useUnifiedTopology: true, useCreateIndex: true }, (err) => {
+	if (err) {
+		console.log('Unable to connect, please check connection url.' + ' ' + err);
+	} else {
+		console.log('Connected to database.');
+	}
+});
+
+
+// Database schema (pardon the trash organization idc ._.)
+let EventObject = mongoose.model('EventObject', new mongoose.Schema({
+	course: {
+		type: String,
+		required: true
+	},
+	time: {
+		type: String,
+		required: true
+	}
+}), 'events');
+
+// Create jobs of all events in database
+EventObject.find({}, (err, docs) => {
+	docs.forEach(doc => {
+		let courseID = doc.course;
+		let channel = client.channels.find(channel => {
+			return channel.name.toUpperCase() === courseID.toUpperCase();
+		});
+		let [hour, minute, day] = doc.time.split(' ');
+		let userRole;
+		client.guilds.forEach(guild => guild.roles.forEach(role => {
+			if(role.name.toUpperCase() === courseID.toUpperCase()) {
+				userRole = role;
+			}
+		}));
+		if(channel && userRole) {
+			let job = createJob(channel, userRole, courseID, hour, minute, day);
+			console.log(`Created events for: ${job.name}`);
+		} else {
+			EventObject.findByIdAndDelete(doc._id);
+		}
+	});
+});
 
 // generates unique event IDs
 let uniqueID = 1;
@@ -173,6 +219,7 @@ client.on('message', (msg) => {
 				msg.channel.send(`!enroll <courseID> [Error: Invalid course code or missing parameter]`);
 			}
 			// Adds a job to the schedule
+			// Sample input: !addEvent CP212 11 22 3 creates an event on Wednesday (3rd day) at 11:22am
 		} else if (command == '!addEvent' && !msg.author.bot) {
 			if (msg.member.roles.find(role => role.name === 'Moderator' || role.name === 'engineer')) {
 				let [courseID, hour, minute, day] = content.split(' ').slice(1);
@@ -185,6 +232,11 @@ client.on('message', (msg) => {
 					let role = msg.guild.roles.find((role) => role.name.toUpperCase() === courseID.toUpperCase());
 					let channel = msg.guild.channels.find((channel) => channel.name === courseID.toLowerCase());
 					if (role && channel) {
+						const eventObject = new EventObject({
+							course: courseID,
+							time: `${hour} ${minute} ${day}`,
+						});
+						eventObject.save();
 						let job = createJob(channel, role, courseID, hour, minute, day);
 						msg.channel.send(`Event was created successfully:\n${job.name}`);
 					} else {
@@ -249,8 +301,6 @@ function createJob(channel, role, courseID, hour, minute, day) {
 			channel.send(`${role} Class is starting!`);
 		}
 	);
-
-	jobs.set(eventID, job);
 	uniqueID++;
 	return job;
 }
